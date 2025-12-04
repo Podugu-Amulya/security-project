@@ -1,0 +1,5 @@
+# FORCE REBUILD 
+fastapi
+uvicorn
+cryptography
+pyotp
