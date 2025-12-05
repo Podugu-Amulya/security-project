@@ -1,0 +1,42 @@
+version: '3.7'
+
+services:
+  # The name of your service, referencing your Dockerfile
+  app:
+    # Build configuration to use the Dockerfile in the current directory
+    build:
+      context: .
+      dockerfile: Dockerfile
+    
+    # Optional: Assign a container name for easier reference
+    container_name: security-project-app
+
+    # Map the exposed port 8080 from the container to port 8080 on your host machine
+    ports:
+      - "8080:8080"
+
+    # CRITICAL: Define volumes to persist data and mount keys
+    volumes:
+      # 1. Volume for persistent seed data (seed.txt)
+      seed-data:/app/data
+      
+      # 2. Volume for cron output and log (cron_output.log)
+      cron-output:/app/cron
+      
+      # 3. Mount all required PEM keys from your local host into the container
+      # This assumes keys are in the root directory and the container structure expects them in /app/
+      ./student_private.pem:/app/student_private.pem
+      ./student_public.pem:/app/student_public.pem
+      ./instructor_public.pem:/app/instructor_public.pem
+
+    # Set critical environment variable for time synchronization
+    environment:
+      - TZ=UTC
+
+    # Set restart policy to ensure cron and server come back up after a crash
+    restart: unless-stopped
+
+# Define named volumes for data persistence
+volumes:
+  seed-data:
+  cron-output:
