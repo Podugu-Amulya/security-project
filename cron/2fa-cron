@@ -1,0 +1,1 @@
+* * * * * /usr/local/bin/python3 /app/data/scripts/log_2fa_cron.py >> /app/cron/cron_output.log 2>&1
