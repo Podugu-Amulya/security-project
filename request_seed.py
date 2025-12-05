@@ -133,51 +133,160 @@
 
 
 
-import requests
+# import requests
 
-def request_seed(student_id: str, github_repo_url: str, api_url: str):
-    """
-    Request encrypted seed from instructor API
-    """
+# def request_seed(student_id: str, github_repo_url: str, api_url: str):
+#     """
+#     Request encrypted seed from instructor API
+#     """
 
-    # 1. Read student public key
-    with open("student_public.pem", "r") as f:
-        public_key = f.read()  # keep BEGIN/END lines
+#     # 1. Read student public key
+#     with open("student_public.pem", "r") as f:
+#         public_key = f.read()  # keep BEGIN/END lines
 
-    # 2. Prepare payload
-    payload = {
-        "student_id": student_id,
-        "github_repo_url": github_repo_url,
-        "public_key": public_key
-    }
+#     # 2. Prepare payload
+#     payload = {
+#         "student_id": student_id,
+#         "github_repo_url": github_repo_url,
+#         "public_key": public_key
+#     }
 
-    # 3. Send POST request
+#     # 3. Send POST request
+#     try:
+#         response = requests.post(api_url, json=payload, timeout=10)
+#         response.raise_for_status()
+#     except requests.RequestException as e:
+#         print("HTTP Request failed:", e)
+#         return
+
+#     # 4. Parse JSON response
+#     data = response.json()
+#     if data.get("status") == "success":
+#         encrypted_seed = data["encrypted_seed"]
+
+#         # 5. Save encrypted seed
+#         with open("encrypted_seed.txt", "w") as f:
+#             f.write(encrypted_seed)
+#         print("Encrypted seed saved to encrypted_seed.txt")
+#     else:
+#         print("Error from API:", data)
+
+
+
+# if __name__== "__main__":
+
+#     student_id = input("Enter your Student ID: ").strip()
+#     github_repo_url = input("Enter your GitHub Repo URL: ").strip()
+
+#     api_url = "https://eajeyq4r3zljoq4rpovy2nthda0vtjqf.lambda-url.ap-south-1.on.aws"
+
+#     request_seed(student_id, github_repo_url, api_url)
+
+
+
+
+
+
+import os
+import subprocess
+import base64
+from cryptography.hazmat.primitives.asymmetric import rsa, padding
+from cryptography.hazmat.primitives import hashes
+from cryptography.hazmat.primitives.serialization import load_pem_private_key, load_pem_public_key
+from cryptography.hazmat.backends import default_backend
+
+# --- FILE PATHS ---
+PRIVATE_KEY_PATH = "student_private.pem"
+INSTRUCTOR_PUBLIC_KEY_PATH = "instructor_public.pem"
+ENCRYPTED_SEED_PATH = "encrypted_seed.txt"
+
+# --- 1. GET COMMIT HASH ---
+def get_commit_hash():
+    """Runs git log command to get the latest commit hash."""
     try:
-        response = requests.post(api_url, json=payload, timeout=10)
-        response.raise_for_status()
-    except requests.RequestException as e:
-        print("HTTP Request failed:", e)
-        return
+        # Executes: git log -1 --format=%H
+        commit_hash = subprocess.check_output(
+            ["git", "log", "-1", "--format=%H"],
+            text=True,
+            stderr=subprocess.PIPE
+        ).strip()
+        if not commit_hash or len(commit_hash) != 40:
+            raise Exception("Git command did not return a valid 40-character hash.")
+        return commit_hash
+    except subprocess.CalledProcessError as e:
+        print(f"Error running git command: {e.stderr.strip()}")
+        raise
+    except FileNotFoundError:
+        print("Error: 'git' command not found. Ensure Git is installed and in your PATH.")
+        raise
+    except Exception as e:
+        print(f"Error retrieving commit hash: {e}")
+        raise
 
-    # 4. Parse JSON response
-    data = response.json()
-    if data.get("status") == "success":
-        encrypted_seed = data["encrypted_seed"]
+# --- 2. SIGN HASH (RSA-PSS with SHA-256) ---
+def sign_message(message_bytes, private_key):
+    """Signs the message using RSA-PSS and SHA-256 as required."""
+    # Message bytes must be ASCII/UTF-8 bytes of the 40-char hash string
+    signature = private_key.sign(
+        message_bytes,
+        padding.PSS(
+            mgf=padding.MGF1(hashes.SHA256()),
+            salt_length=padding.PSS.MAX_LENGTH # Salt length must be maximum
+        ),
+        hashes.SHA256() # Hash Algorithm is SHA-256
+    )
+    return signature
 
-        # 5. Save encrypted seed
-        with open("encrypted_seed.txt", "w") as f:
-            f.write(encrypted_seed)
-        print("Encrypted seed saved to encrypted_seed.txt")
-    else:
-        print("Error from API:", data)
+# --- 3. ENCRYPT SIGNATURE (RSA/OAEP with SHA-256) ---
+def encrypt_with_public_key(data, public_key):
+    """Encrypts data (the signature) using RSA/OAEP and SHA-256 as required."""
+    # Use OAEP padding with MGF1 and SHA-256
+    ciphertext = public_key.encrypt(
+        data,
+        padding.OAEP(
+            mgf=padding.MGF1(algorithm=hashes.SHA256()),
+            algorithm=hashes.SHA256(),
+            label=None
+        )
+    )
+    return ciphertext
 
+# --- 4. MAIN EXECUTION ---
+if __name__ == "__main__":
+    try:
+        # Load Keys
+        with open(PRIVATE_KEY_PATH, "rb") as key_file:
+            student_private_key = load_pem_private_key(key_file.read(), password=None, backend=default_backend())
 
+        with open(INSTRUCTOR_PUBLIC_KEY_PATH, "rb") as key_file:
+            instructor_public_key = load_pem_public_key(key_file.read(), backend=default_backend())
 
-if __name__== "__main__":
+        # Get Commit Hash
+        commit_hash = get_commit_hash()
+        commit_message_bytes = commit_hash.encode('ascii')
 
-    student_id = input("Enter your Student ID: ").strip()
-    github_repo_url = input("Enter your GitHub Repo URL: ").strip()
+        # --- A. GENERATE SIGNATURE ---
+        signature = sign_message(commit_message_bytes, student_private_key)
 
-    api_url = "https://eajeyq4r3zljoq4rpovy2nthda0vtjqf.lambda-url.ap-south-1.on.aws"
+        # --- B. ENCRYPT SIGNATURE ---
+        encrypted_signature = encrypt_with_public_key(signature, instructor_public_key)
 
-    request_seed(student_id, github_repo_url, api_url)
+        # --- C. BASE64 ENCODE ---
+        encrypted_signature_base64 = base64.b64encode(encrypted_signature).decode('utf-8')
+
+        # --- FINAL OUTPUT: CRITICAL STEP FOR SUBMISSION ---
+        print("\n--- REQUIRED SUBMISSION PROOF ---")
+        print(f"Commit Hash (Field 2): {commit_hash}")
+        print("Encrypted Commit Signature (Field 3, single-line Base64):")
+        
+        # This is the output you MUST copy to the submission form
+        print(encrypted_signature_base64)
+        print("---------------------------------\n")
+
+    except FileNotFoundError as e:
+        print(f"\nFATAL ERROR: Required key file not found: {e.filename}. Ensure {PRIVATE_KEY_PATH} and {INSTRUCTOR_PUBLIC_KEY_PATH} are in the project root.")
+    except Exception as e:
+        print(f"An error occurred during proof generation: {e}")
+
+    # Note: The original script's input prompts (Student ID, URL) are not needed for 
+    # cryptographic proof generation but are left out here to keep the code focused on the output.
