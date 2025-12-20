@@ -1,5 +1,3 @@
-# FORCE REBUILD 
-fastapi
-uvicorn
-cryptography
+flask
 pyotp
+cryptography
